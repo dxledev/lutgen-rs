@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use strum::VariantArray;
 
-use crate::palette::{lutgen_dir, DynamicPalette};
+use crate::palette::DynamicPalette;
 use crate::state::LutAlgorithm;
 use crate::App;
 
@@ -176,6 +176,11 @@ pub struct PaletteEditor {
     name: String,
 }
 
+pub struct PaletteEditorOutput {
+    pub apply: bool,
+    pub save_result: Option<std::io::Result<std::path::PathBuf>>,
+}
+
 impl PaletteEditor {
     pub fn new(current: &DynamicPalette) -> Self {
         Self {
@@ -188,10 +193,10 @@ impl PaletteEditor {
         ui: &mut egui::Ui,
         palette: &mut Vec<[u8; 3]>,
         current: &mut DynamicPalette,
-    ) -> [bool; 2] {
+    ) -> PaletteEditorOutput {
         // color palette
         let mut apply = false;
-        let mut saved = false;
+        let mut save_result = None;
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 let enabled = matches!(current, DynamicPalette::Custom(_));
@@ -202,9 +207,12 @@ impl PaletteEditor {
                 );
 
                 if ui.add_enabled(enabled, egui::Button::new("save")).clicked() {
-                    *current = DynamicPalette::Custom(self.name.clone());
-                    current.save(palette).unwrap();
-                    saved = true;
+                    let next = DynamicPalette::Custom(self.name.trim().to_string());
+                    save_result = Some(next.save(palette));
+                    if save_result.as_ref().is_some_and(|result| result.is_ok()) {
+                        *current = next;
+                        self.name = current.to_string();
+                    }
                 }
             });
             ui.separator();
@@ -252,7 +260,7 @@ impl PaletteEditor {
                 };
             });
         });
-        [apply, saved]
+        PaletteEditorOutput { apply, save_result }
     }
 }
 
@@ -468,18 +476,22 @@ impl App {
         }
 
         // palette editor
-        let [changed, saved] = self.palette_edit.show(
+        let editor_output = self.palette_edit.show(
             ui,
             &mut self.state.palette,
             &mut self.state.palette_selection,
         );
-        apply |= changed;
-        if saved {
-            self.palette_box.reindex(&self.state.palette_selection);
-            self.state.last_event = format!(
-                "Saved custom palette to {}",
-                lutgen_dir().join(&self.palette_edit.name).display()
-            );
+        apply |= editor_output.apply;
+        if let Some(save_result) = editor_output.save_result {
+            match save_result {
+                Ok(path) => {
+                    self.palette_box.reindex(&self.state.palette_selection);
+                    self.state.last_event = format!("Saved custom palette to {}", path.display());
+                },
+                Err(error) => {
+                    self.state.last_event = format!("Failed to save custom palette: {error}");
+                },
+            }
         }
 
         // settings panel

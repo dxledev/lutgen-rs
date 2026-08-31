@@ -2,6 +2,9 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
+use std::io::{Error, ErrorKind};
+use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -24,7 +27,11 @@ impl Display for DynamicPalette {
 pub fn lutgen_dir() -> PathBuf {
     std::env::var("LUTGEN_DIR")
         .map(Into::into)
-        .unwrap_or(dirs::config_dir().unwrap().join("lutgen"))
+        .unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("lutgen")
+        })
 }
 
 impl DynamicPalette {
@@ -54,19 +61,15 @@ impl DynamicPalette {
         Ok(palettes)
     }
 
-    pub fn save(&self, palette: &[[u8; 3]]) -> std::io::Result<()> {
+    pub fn save(&self, palette: &[[u8; 3]]) -> std::io::Result<PathBuf> {
         if let Self::Custom(name) = self {
-            let path = lutgen_dir().join(name);
-            std::fs::write(
-                path,
-                palette
-                    .iter()
-                    .map(|c| Color(*c).to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )?;
+            return save_custom_palette(&lutgen_dir(), name, palette);
         }
-        Ok(())
+
+        Err(Error::new(
+            ErrorKind::InvalidInput,
+            "builtin palettes cannot be saved",
+        ))
     }
 
     pub fn get(&self) -> Cow<'static, [[u8; 3]]> {
@@ -101,6 +104,44 @@ impl DynamicPalette {
     }
 }
 
+fn save_custom_palette(
+    base_dir: &Path,
+    name: &str,
+    palette: &[[u8; 3]],
+) -> std::io::Result<PathBuf> {
+    let path = custom_palette_path(base_dir, name)?;
+    std::fs::create_dir_all(base_dir)?;
+    std::fs::write(
+        &path,
+        palette
+            .iter()
+            .map(|c| Color(*c).to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+
+    Ok(path)
+}
+
+fn custom_palette_path(base_dir: &Path, name: &str) -> std::io::Result<PathBuf> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "palette name cannot be empty",
+        ));
+    }
+
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(base_dir.join(name)),
+        _ => Err(Error::new(
+            ErrorKind::InvalidInput,
+            "palette name must be a single file name",
+        )),
+    }
+}
+
 impl<'de> Deserialize<'de> for DynamicPalette {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -124,5 +165,44 @@ impl Serialize for DynamicPalette {
             DynamicPalette::Builtin(palette) => serializer.serialize_str(palette.into()),
             DynamicPalette::Custom(name) => serializer.serialize_str(name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{custom_palette_path, save_custom_palette};
+
+    fn temp_palette_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "lutgen-studio-palette-test-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn save_creates_missing_directory() {
+        let dir = temp_palette_dir();
+        let path = save_custom_palette(&dir, "my-palette", &[[0x12, 0x34, 0x56]]).unwrap();
+
+        assert_eq!(path, dir.join("my-palette"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#123456");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reject_invalid_palette_name() {
+        let dir = temp_palette_dir();
+        let error = custom_palette_path(&dir, "nested/palette").unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
     }
 }
