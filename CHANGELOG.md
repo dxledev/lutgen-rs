@@ -6,7 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Lutgen CLI
+### Lutgen Studio: deprecated
+
+The `lutgen-studio` GUI has been removed in favor of Lutgen Web, an
+interactive browser app at [lut.sh/app](https://lut.sh/app) that runs the
+full remapping pipeline on the GPU.
+
+Existing `lutgen-studio` releases stay published on crates.io and in
+distro repositories, but the crate is no longer built, released, or
+maintained. Installs from source, the `lutgen-studio` nix package, and
+the per-target release binaries are all gone.
+
+The CLI and the `lutgen` library are unaffected.
+
+## [2026-05-14]
+
+### Lutgen CLI v1.1.1
 
 New default algorithm: Gaussian Blur (`--gaussian-blur` / `-B`) replaces Gaussian RBF as the default. This algorithm builds a nearest-neighbor LUT then applies separable Gaussian blur on OKLab color values, producing results mathematically equivalent to gaussian sampling but significantly faster.
 
@@ -15,17 +30,23 @@ Help text improvements:
 - Custom usage lines per algorithm avoid confusing flag combinations
 - Alternative algorithm flags now appear in shell completions
 
-### lutgen (library)
+Fixes:
+- Corrected hex color regex in `patch` subcommand; 6-digit hex colors were being mangled to the last 3 characters (#43)
+
+### lutgen (library) v0.15.0
 
 - New `GaussianBlurRemapper` algorithm with optimized separable blur implementation
 - Parallelized OKLab-to-RGB conversion in LUT generation
 - Reduced heap allocations in parallel nearest-neighbor tree building
 
-### lutgen-palettes
+### lutgen-palettes v0.4.2
 
 - Added Evergarden palettes (fall, spring, summer, winter) (#41)
+- Updated Evergarden palettes with newest colors (#44)
 
-### Lutgen Studio
+### Lutgen Studio v0.4.0
+
+New default algorithm: Gaussian Blur replaces Gaussian RBF as the default, matching the CLI. Existing presets continue to work; new sessions start on the faster algorithm.
 
 #### Web app
 
@@ -38,6 +59,8 @@ Other improvements:
 - Zoom percentage display in statusline
 - Visual feedback with dimmed image and spinner during processing
 - Fallback to re-encode without transparency if encoding fails
+- Sliders dynamically size based on drag value width, accounting for item spacing
+- Fixed image panning behavior
 
 ---
 
