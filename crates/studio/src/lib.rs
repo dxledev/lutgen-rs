@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use crate::file_picker::FileDialog;
 use crate::state::{LutAlgorithm, UiState};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::theme::ThemeManager;
 use crate::ui::left::{PaletteEditor, PaletteFilterBox};
 pub use crate::worker::Worker;
 use crate::worker::{LutAlgorithmArgs, WorkerHandle};
@@ -12,10 +14,15 @@ mod color;
 mod file_picker;
 mod palette;
 mod state;
+#[cfg(not(target_arch = "wasm32"))]
+mod theme;
 mod ui;
 mod updates;
 mod utils;
 mod worker;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::theme::generate_system_theme;
 
 pub struct App {
     /// Main app state
@@ -33,6 +40,8 @@ pub struct App {
     pub open_picker: FileDialog,
     #[cfg(not(target_arch = "wasm32"))]
     pub save_picker: FileDialog,
+    #[cfg(not(target_arch = "wasm32"))]
+    theme_manager: ThemeManager,
     /// Lutgen icon
     icon: egui::TextureHandle,
 }
@@ -64,6 +73,8 @@ impl App {
 
         // Spawn background worker thread
         let worker = WorkerHandle::spawn(cc.egui_ctx.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let theme_manager = ThemeManager::new(&cc.egui_ctx);
 
         #[allow(unused_mut)]
         let mut this = Self {
@@ -74,10 +85,15 @@ impl App {
             open_picker: FileDialog::pick(cc.egui_ctx.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             save_picker: FileDialog::save(cc.egui_ctx.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            theme_manager,
             state,
             icon,
             worker,
         };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        this.apply_file_dialog_theme();
 
         // Optionally load current image and apply settings right away
         #[cfg(not(target_arch = "wasm32"))]
@@ -121,6 +137,11 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.theme_manager.update(ctx) {
+            self.apply_file_dialog_theme();
+        }
+
         self.inline_layout = ctx.available_rect().width() < 600.;
 
         // Handle any incoming events from the backend
@@ -149,5 +170,14 @@ impl eframe::App for App {
 
         // Show UI
         self.show(ctx);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl App {
+    fn apply_file_dialog_theme(&mut self) {
+        let overlay = self.theme_manager.dialog_overlay();
+        self.open_picker.set_modal_overlay(overlay);
+        self.save_picker.set_modal_overlay(overlay);
     }
 }

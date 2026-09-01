@@ -53,6 +53,22 @@ impl App {
 
                     ui.menu_button("🎨  Theme", |ui| {
                         egui::widgets::global_theme_preference_buttons(ui);
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if ui.ctx().options(|options| options.theme_preference)
+                            == egui::ThemePreference::System
+                        {
+                            ui.separator();
+                            let name = self
+                                .theme_manager
+                                .active_theme_name()
+                                .unwrap_or("unavailable");
+                            ui.weak(format!("Generated system theme: {name}"))
+                                .on_hover_text(format!(
+                                    "Theme file: {}",
+                                    self.theme_manager.theme_path().display()
+                                ));
+                        }
                     });
                 });
 

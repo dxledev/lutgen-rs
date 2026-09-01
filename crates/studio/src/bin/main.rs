@@ -13,6 +13,9 @@ struct Cli {
         })
     )]
     verbosity: log::LevelFilter,
+    /// Generate theme.toml from the active desktop theme and exit
+    #[bpaf(long("generate-theme"), switch)]
+    generate_theme: bool,
     /// Image to open on startup
     #[bpaf(positional, guard(|p| p.exists(), "Image path not found"), optional)]
     input: Option<std::path::PathBuf>,
@@ -66,6 +69,17 @@ pub fn main() -> eframe::Result {
         .filter_level(args.verbosity)
         .parse_env("RUST_LOG")
         .init();
+
+    if args.generate_theme {
+        match lutgen_studio::generate_system_theme() {
+            Ok(path) => println!("{}", path.display()),
+            Err(error) => {
+                eprintln!("Failed to generate Studio theme: {error}");
+                std::process::exit(1);
+            },
+        }
+        return Ok(());
+    }
 
     let mut native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

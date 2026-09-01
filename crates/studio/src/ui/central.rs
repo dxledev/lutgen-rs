@@ -3,6 +3,7 @@ use crate::App;
 
 impl App {
     fn show_image(&mut self, mut size: egui::Vec2, ui: &mut egui::Ui) {
+        let corner_radius = ui.visuals().widgets.noninteractive.corner_radius;
         if self.state.edited_texture.is_none() && self.state.image_texture.is_none() {
             // no image loaded
             if self.inline_layout {
@@ -14,7 +15,7 @@ impl App {
                 egui::Align2::CENTER_CENTER,
                 "Load image ...",
                 egui::FontId::default(),
-                egui::Color32::GRAY,
+                ui.visuals().weak_text_color(),
             );
             if res.clicked() {
                 self.open_picker.trigger(None);
@@ -28,7 +29,7 @@ impl App {
                     egui::Image::from_texture(texture)
                         .texture_options(egui::TextureOptions::NEAREST)
                         .max_size(size)
-                        .corner_radius(4.0)
+                        .corner_radius(corner_radius)
                         .sense(egui::Sense::click()),
                 );
                 if res.clicked() {
@@ -41,7 +42,7 @@ impl App {
                     egui::Image::from_texture(texture)
                         .texture_options(egui::TextureOptions::NEAREST)
                         .max_size(size)
-                        .corner_radius(4.0)
+                        .corner_radius(corner_radius)
                         .sense(egui::Sense::click()),
                 );
                 if res.clicked() {
@@ -55,20 +56,24 @@ impl App {
                 // draw "original" indicator
                 let painter = ui.painter();
                 let pos = res.rect.min + egui::Vec2::splat(8.);
+                let text_color = ui.visuals().text_color();
                 let galley = painter.layout_no_wrap(
                     "Original".to_string(),
                     egui::TextStyle::Body.resolve(ui.style()),
-                    egui::Color32::WHITE,
+                    text_color,
                 );
                 let text_rect = egui::Rect::from_min_size(pos, galley.size());
                 let padding = egui::Vec2::splat(6.0);
                 let bg_rect = text_rect.expand2(padding);
-                painter.rect_filled(
-                    bg_rect,
-                    2.0,
-                    egui::Color32::from_rgba_unmultiplied(0x16, 0x16, 0x16, 172),
+                let background = ui.visuals().window_fill();
+                let background = egui::Color32::from_rgba_unmultiplied(
+                    background.r(),
+                    background.g(),
+                    background.b(),
+                    220,
                 );
-                painter.galley(pos, galley, egui::Color32::WHITE);
+                painter.rect_filled(bg_rect, corner_radius, background);
+                painter.galley(pos, galley, text_color);
 
                 res.rect
             } else {
@@ -78,15 +83,17 @@ impl App {
             // paint border
             ui.painter().rect_stroke(
                 rect,
-                4.0,
-                egui::Stroke::new(1.0, egui::Color32::GRAY),
+                corner_radius,
+                ui.visuals().window_stroke(),
                 egui::StrokeKind::Middle,
             );
 
             // show spinner if processing
             if self.state.processing {
-                ui.painter()
-                    .rect_filled(rect, 4.0, egui::Color32::from_black_alpha(64));
+                let panel = ui.visuals().panel_fill;
+                let overlay =
+                    egui::Color32::from_rgba_unmultiplied(panel.r(), panel.g(), panel.b(), 96);
+                ui.painter().rect_filled(rect, corner_radius, overlay);
                 egui::Spinner::new().paint_at(
                     ui,
                     egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(30.)),

@@ -23,6 +23,10 @@ pub struct FileDialog {
 // Wrapper around egui_file_dialog for native support
 #[cfg(not(target_arch = "wasm32"))]
 impl FileDialog {
+    pub fn set_modal_overlay(&mut self, color: egui::Color32) {
+        self.inner.config_mut().modal_overlay_color = color;
+    }
+
     pub fn save(ctx: egui::Context) -> Self {
         let mut inner = egui_file_dialog::FileDialog::new().title("Save Image As");
         for &ext in IMAGE_EXTENSIONS {
