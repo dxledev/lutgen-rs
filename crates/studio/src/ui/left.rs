@@ -5,7 +5,24 @@ use strum::VariantArray;
 
 use crate::palette::DynamicPalette;
 use crate::state::LutAlgorithm;
+use crate::utils::floor_to_pixels;
 use crate::App;
+
+const SIDEBAR_MIN_WIDTH: f32 = 214.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 360.0;
+const SIDEBAR_MAX_WIDTH: f32 = 512.0;
+const SIDEBAR_MAX_WINDOW_FRACTION: f32 = 0.5;
+
+fn sidebar_max_width(available_width: f32) -> f32 {
+    (available_width * SIDEBAR_MAX_WINDOW_FRACTION).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+}
+
+fn sidebar_panel(available_width: f32) -> egui::SidePanel {
+    egui::SidePanel::left("args")
+        .resizable(true)
+        .default_width(SIDEBAR_DEFAULT_WIDTH)
+        .width_range(SIDEBAR_MIN_WIDTH..=sidebar_max_width(available_width))
+}
 
 /// Helper to add a labeled slider with dynamic DragValue sizing.
 /// The DragValue is measured first, then the slider fills remaining space.
@@ -20,7 +37,8 @@ fn labeled_slider<Num: egui::emath::Numeric>(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let drag = ui.add(egui::DragValue::new(value).range(range.clone()));
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.style_mut().spacing.slider_width = ui.available_width();
+                ui.style_mut().spacing.slider_width =
+                    ui.available_width() - ui.spacing().item_spacing.x;
                 let slider = ui.add(egui::Slider::new(value, range).show_value(false));
                 drag | slider
             })
@@ -88,20 +106,33 @@ impl PaletteFilterBox {
         let mut apply = false;
         let mut res = ui
             .group(|ui| {
+                let width = floor_to_pixels(ui, ui.available_width());
                 egui::Resize::default()
                     .resizable([true, false])
-                    .min_width(ui.available_width())
-                    .max_width(ui.available_width())
+                    .min_width(width)
+                    .max_width(width)
                     .with_stroke(false)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if egui::TextEdit::singleline(&mut self.filter)
-                                .hint_text("Search Palettes ...")
-                                .desired_width(ui.available_width() - 55.)
-                                .show(ui)
-                                .response
-                                .changed()
-                            {
+                            let (next, previous, filter_changed) = ui
+                                .with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let next = ui.button(">").clicked();
+                                        let previous = ui.button("<").clicked();
+                                        let filter_changed = ui
+                                            .add(
+                                                egui::TextEdit::singleline(&mut self.filter)
+                                                    .hint_text("Search Palettes ...")
+                                                    .desired_width(ui.available_width()),
+                                            )
+                                            .changed();
+                                        (next, previous, filter_changed)
+                                    },
+                                )
+                                .inner;
+
+                            if filter_changed {
                                 // update filtered items
                                 self.filter();
                                 if !self.filtered.is_empty() {
@@ -110,7 +141,7 @@ impl PaletteFilterBox {
                                 }
                             }
 
-                            if ui.button("<").clicked() && !self.filtered.is_empty() {
+                            if previous && !self.filtered.is_empty() {
                                 if self.idx == 0 {
                                     self.idx = self.filtered.len() - 1;
                                 } else {
@@ -119,7 +150,7 @@ impl PaletteFilterBox {
                                 *current = (*self.filtered[self.idx]).clone();
                                 apply = true;
                             }
-                            if ui.button(">").clicked() && !self.filtered.is_empty() {
+                            if next && !self.filtered.is_empty() {
                                 if self.idx >= self.filtered.len() - 1 {
                                     self.idx = 0;
                                 } else {
@@ -200,13 +231,19 @@ impl PaletteEditor {
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 let enabled = matches!(current, DynamicPalette::Custom(_));
-                ui.add_enabled(
-                    enabled,
-                    egui::TextEdit::singleline(&mut self.name)
-                        .desired_width(ui.available_width() - 49.),
-                );
+                let save = ui
+                    .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let save = ui.add_enabled(enabled, egui::Button::new("save")).clicked();
+                        ui.add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut self.name)
+                                .desired_width(ui.available_width()),
+                        );
+                        save
+                    })
+                    .inner;
 
-                if ui.add_enabled(enabled, egui::Button::new("save")).clicked() {
+                if save {
                     let next = DynamicPalette::Custom(self.name.trim().to_string());
                     save_result = Some(next.save(palette));
                     if save_result.as_ref().is_some_and(|result| result.is_ok()) {
@@ -505,15 +542,77 @@ impl App {
     /// side panel for lut args
     pub fn show_sidebar(&mut self, ctx: &egui::Context) {
         if !self.inline_layout {
-            egui::SidePanel::left("args")
-                .resizable(true)
-                .min_width(214.)
-                .show(ctx, |ui| {
-                    ui.take_available_width();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.show_sidebar_inner(ui);
-                    });
+            sidebar_panel(ctx.available_rect().width()).show(ctx, |ui| {
+                ui.set_width(floor_to_pixels(ui, ui.available_width()));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.show_sidebar_inner(ui);
                 });
+            });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::palette::DynamicPalette;
+    use crate::utils::floor_to_pixels;
+
+    use super::{
+        sidebar_max_width, sidebar_panel, PaletteEditor, PaletteFilterBox, SIDEBAR_MAX_WIDTH,
+    };
+
+    #[test]
+    fn sidebar_is_half_width_at_most_and_quarter_width_on_wide_windows() {
+        assert_eq!(sidebar_max_width(800.0), 400.0);
+        assert_eq!(sidebar_max_width(1024.0), SIDEBAR_MAX_WIDTH);
+        assert_eq!(sidebar_max_width(2048.0), SIDEBAR_MAX_WIDTH);
+        assert_eq!(sidebar_max_width(2048.0) / 2048.0, 0.25);
+    }
+
+    #[test]
+    fn themed_controls_do_not_overflow_the_sidebar() {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(1.25);
+        ctx.style_mut(|style| {
+            style.spacing.button_padding = egui::vec2(12.0, 6.0);
+            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        });
+
+        let window_width = 2048.0;
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(window_width, 1000.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(input(), |ctx| {
+            egui::SidePanel::left("args")
+                .exact_width(window_width)
+                .show(ctx, |_| {});
+        });
+
+        let mut selection = DynamicPalette::Builtin(lutgen_palettes::Palette::Carburetor);
+        let mut palette = selection.get().to_vec();
+        let mut filter = PaletteFilterBox::new(&selection);
+        let mut editor = PaletteEditor::new(&selection);
+        let mut rendered_width = 0.0;
+
+        for _ in 0..3 {
+            let _ = ctx.run(input(), |ctx| {
+                let response = sidebar_panel(window_width).show(ctx, |ui| {
+                    ui.set_width(floor_to_pixels(ui, ui.available_width()));
+                    filter.show(ui, &mut selection);
+                    editor.show(ui, &mut palette, &mut selection);
+                });
+                rendered_width = response.response.rect.width();
+            });
+        }
+
+        assert!(
+            rendered_width <= SIDEBAR_MAX_WIDTH,
+            "sidebar rendered at {rendered_width} points"
+        );
     }
 }

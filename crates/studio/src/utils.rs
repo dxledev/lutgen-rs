@@ -3,6 +3,11 @@ use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
+pub fn floor_to_pixels(ui: &egui::Ui, points: f32) -> f32 {
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    (points * pixels_per_point).floor() / pixels_per_point
+}
+
 /// Utility to wrap non-hashable types with their string impl
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Hashed<T: Clone + Debug>(pub T);
