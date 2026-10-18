@@ -12,6 +12,7 @@ pub struct ThemePaths {
     dashboard_style: PathBuf,
     wardnc_config: PathBuf,
     current_theme_dir: PathBuf,
+    theme_selector: PathBuf,
 }
 
 impl ThemePaths {
@@ -20,6 +21,10 @@ impl ThemePaths {
         let config_dir = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config"));
+        let current_theme_dir = env_path("LUTGEN_STUDIO_CURRENT_THEME_DIR")
+            .unwrap_or_else(|| config_dir.join("themes/current"));
+        let theme_selector = env_path("LUTGEN_STUDIO_THEME_SELECTOR")
+            .unwrap_or_else(|| selector_beside(&current_theme_dir));
         Self {
             output: env_path("LUTGEN_STUDIO_THEME_FILE")
                 .unwrap_or_else(|| workspace_root().join("theme.toml")),
@@ -31,8 +36,8 @@ impl ThemePaths {
                 .unwrap_or_else(|| config_dir.join("dashboard/style.qml")),
             wardnc_config: env_path("LUTGEN_STUDIO_WARDNC_CONFIG")
                 .unwrap_or_else(|| config_dir.join("wardnc/config.toml")),
-            current_theme_dir: env_path("LUTGEN_STUDIO_CURRENT_THEME_DIR")
-                .unwrap_or_else(|| config_dir.join("themes/current")),
+            current_theme_dir,
+            theme_selector,
         }
     }
 
@@ -44,7 +49,31 @@ impl ThemePaths {
             self.dashboard_style.clone(),
             self.wardnc_config.clone(),
             self.current_theme_dir.clone(),
+            self.theme_selector.clone(),
         ]
+    }
+
+    /// The desktop switches between the static `current` theme and a dynamic
+    /// palette (any shell) by repointing a selector symlink, while app configs
+    /// keep referencing `current`. Redirect those references to the selector.
+    fn redirect(&self) -> Option<ThemeRedirect> {
+        let to = fs::canonicalize(&self.theme_selector)
+            .ok()
+            .filter(|path| path.is_dir())?;
+        let mut from = vec![self.current_theme_dir.clone()];
+        if let Some(themes) = self
+            .current_theme_dir
+            .parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            && let Some(name) = self.current_theme_dir.file_name()
+        {
+            from.push(themes.join(name));
+        }
+        let current = fs::canonicalize(&self.current_theme_dir).ok();
+        if current.as_ref() == Some(&to) {
+            return None;
+        }
+        Some(ThemeRedirect { from, to })
     }
 
     #[cfg(test)]
@@ -56,6 +85,7 @@ impl ThemePaths {
             dashboard_style: root.join("dashboard/style.qml"),
             wardnc_config: root.join("wardnc/config.toml"),
             current_theme_dir: root.join("themes/current"),
+            theme_selector: root.join("themes/.caelestia-use"),
         }
     }
 }
@@ -73,7 +103,21 @@ pub struct SourceSnapshot {
 
 impl SourceSnapshot {
     pub fn collect(paths: &ThemePaths) -> Result<Self, String> {
-        let mut collector = SourceCollector::default();
+        if paths.theme_selector.is_symlink() && !paths.theme_selector.exists() {
+            return Err(format!(
+                "theme selector {} does not resolve yet",
+                paths.theme_selector.display()
+            ));
+        }
+        let mut collector = SourceCollector {
+            redirect: paths.redirect(),
+            ..Default::default()
+        };
+        let active_dir = collector
+            .redirect
+            .as_ref()
+            .map(|redirect| redirect.to.clone())
+            .unwrap_or_else(|| paths.current_theme_dir.clone());
 
         let chromack_config = collector.read_toml(&paths.chromack_config)?;
         let chromack_base = paths
@@ -102,17 +146,25 @@ impl SourceSnapshot {
         let wardnc_colors = config_path(&wardnc_config, "colors_css", wardnc_base)?;
         let mut wardnc = HashMap::new();
         collector.load_css(&wardnc_colors, &mut wardnc)?;
-        let global_theme_variables = paths.current_theme_dir.join("ward.css");
+        let global_theme_variables = active_dir.join("ward.css");
         if global_theme_variables.is_file() {
             collector.load_css(&global_theme_variables, &mut wardnc)?;
         }
         collector.load_css(&wardnc_style, &mut wardnc)?;
 
-        let active_theme = fs::canonicalize(&paths.current_theme_dir)
+        let active_theme = fs::canonicalize(&active_dir)
             .ok()
             .and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
+                let name = path.file_name()?.to_string_lossy().into_owned();
+                let dynamic = path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|parent| parent == ".dynamic");
+                Some(if dynamic {
+                    format!("dynamic ({name})")
+                } else {
+                    name
+                })
             })
             .unwrap_or_else(|| "system".to_string());
 
@@ -180,6 +232,21 @@ impl<'a> ThemeValue<'a> {
 struct SourceCollector {
     files: Vec<SourceFile>,
     visited_css: HashSet<PathBuf>,
+    redirect: Option<ThemeRedirect>,
+}
+
+struct ThemeRedirect {
+    from: Vec<PathBuf>,
+    to: PathBuf,
+}
+
+impl ThemeRedirect {
+    fn apply(&self, path: &Path) -> Option<PathBuf> {
+        self.from.iter().find_map(|from| {
+            let redirected = self.to.join(path.strip_prefix(from).ok()?);
+            redirected.exists().then_some(redirected)
+        })
+    }
 }
 
 struct SourceFile {
@@ -188,7 +255,27 @@ struct SourceFile {
 }
 
 impl SourceCollector {
+    /// Redirect `path`, or the target of a symlink at `path`, out of the
+    /// static theme and into the active one.
+    fn resolve(&self, path: &Path) -> PathBuf {
+        let Some(redirect) = &self.redirect else {
+            return path.to_path_buf();
+        };
+        if let Some(redirected) = redirect.apply(path) {
+            return redirected;
+        }
+        fs::read_link(path)
+            .ok()
+            .map(|target| match path.parent() {
+                Some(parent) if target.is_relative() => parent.join(target),
+                _ => target,
+            })
+            .and_then(|target| redirect.apply(&target))
+            .unwrap_or_else(|| path.to_path_buf())
+    }
+
     fn read(&mut self, path: &Path) -> Result<String, String> {
+        let path = &self.resolve(path);
         let contents = fs::read_to_string(path)
             .map_err(|error| format!("failed to read theme source {}: {error}", path.display()))?;
         let tracked_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -212,6 +299,7 @@ impl SourceCollector {
         path: &Path,
         variables: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        let path = &self.resolve(path);
         let identity = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if !self.visited_css.insert(identity) {
             return Ok(());
@@ -252,6 +340,13 @@ fn workspace_root() -> PathBuf {
         .and_then(Path::parent)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
         .to_path_buf()
+}
+
+fn selector_beside(current_theme_dir: &Path) -> PathBuf {
+    current_theme_dir
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".caelestia-use")
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {

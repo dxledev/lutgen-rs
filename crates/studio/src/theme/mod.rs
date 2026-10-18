@@ -907,4 +907,57 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_dynamic_theme_selector() {
+        let root = temp_root();
+        let paths = ThemePaths::test(&root);
+        write_sources(&root, "#9ccfd8");
+        let themes = root.join("themes");
+        let accent_css = |accent: &str| format!(":root {{\n--color-primary: {accent};\n}}");
+        for (dir, accent) in [
+            ("current", "#e08080"),
+            (".dynamic/a", "#f6c177"),
+            (".dynamic/b", "#c4a7e7"),
+        ] {
+            fs::create_dir_all(themes.join(dir)).unwrap();
+            fs::write(themes.join(dir).join("chromack.css"), accent_css(accent)).unwrap();
+        }
+        fs::write(
+            root.join("chromack/style.css"),
+            format!("@import \"{}/current/chromack.css\";", themes.display()),
+        )
+        .unwrap();
+        fs::write(
+            root.join("chromack/colors.css"),
+            ":root {\n--color-surface: #191724;\n--color-text: #e0def4;\n}",
+        )
+        .unwrap();
+        fs::write(
+            root.join("dashboard/theme.qml"),
+            "property color bg: \"#191724\"\nproperty color fg: \"#e0def4\"",
+        )
+        .unwrap();
+        let select = |target: &str| {
+            let selector = themes.join(".caelestia-use");
+            let _ = fs::remove_file(&selector);
+            std::os::unix::fs::symlink(target, selector).unwrap();
+        };
+
+        select("current");
+        let generated = load_or_generate(&paths).unwrap();
+        assert_eq!(generated.theme.colors.accent, "#e08080");
+
+        select(".dynamic/a");
+        let mut cache = ThemeWatchCache::default();
+        cache.refresh(theme_watch_paths(&paths, &generated.theme));
+        select(".dynamic/b");
+        assert!(cache.changed());
+        let dynamic = load_or_generate(&paths).unwrap();
+        assert_eq!(dynamic.theme.colors.accent, "#c4a7e7");
+        assert_eq!(dynamic.theme.metadata.active_theme, "dynamic (b)");
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
