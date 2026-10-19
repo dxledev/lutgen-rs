@@ -91,7 +91,8 @@ impl StudioTheme {
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors.text);
         visuals.widgets.noninteractive.corner_radius = widget_radius;
 
-        visuals.widgets.inactive.bg_fill = colors.input.to_egui();
+        // egui uses this strong fill for slider rails; text fields use text_edit_bg_color.
+        visuals.widgets.inactive.bg_fill = colors.slider_track.to_egui();
         visuals.widgets.inactive.weak_bg_fill = colors.surface.to_egui();
         visuals.widgets.inactive.bg_stroke = border;
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors.text);
@@ -158,6 +159,7 @@ struct ResolvedColors {
     panel: ThemeColor,
     surface: ThemeColor,
     surface_alt: ThemeColor,
+    slider_track: ThemeColor,
     input: ThemeColor,
     text: Color32,
     muted_text: ThemeColor,
@@ -182,6 +184,9 @@ impl ResolvedColors {
             panel: ThemeColor::parse(&colors.panel)?,
             surface: ThemeColor::parse(&colors.surface)?,
             surface_alt: ThemeColor::parse(&colors.surface_alt)?,
+            slider_track: ThemeColor::parse(
+                colors.slider_track.as_deref().unwrap_or(&colors.surface),
+            )?,
             input: ThemeColor::parse(&colors.input)?,
             text: ThemeColor::parse(&colors.text)?.to_egui(),
             muted_text: ThemeColor::parse(&colors.muted_text)?,

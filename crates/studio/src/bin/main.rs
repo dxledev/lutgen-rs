@@ -29,26 +29,12 @@ fn configure_unix_backend(native_options: &mut eframe::NativeOptions) {
         use winit::platform::x11::EventLoopBuilderExtX11 as _;
 
         let backend = std::env::var("LUTGEN_STUDIO_UNIX_BACKEND").ok();
-        let on_hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
-        let has_x11 = std::env::var_os("DISPLAY").is_some();
-
-        let prefer_x11 = match backend.as_deref() {
-            Some("x11") => true,
-            Some("wayland") => false,
-            _ => on_hyprland && has_x11,
-        };
-
-        if prefer_x11 {
+        if matches!(backend.as_deref(), Some("x11")) {
             native_options.event_loop_builder = Some(Box::new(|builder| {
                 builder.with_x11();
             }));
             log::info!(
-                "Using X11 backend for lutgen-studio{}",
-                if backend.is_some() {
-                    " (requested by LUTGEN_STUDIO_UNIX_BACKEND)"
-                } else {
-                    " (Hyprland workaround; set LUTGEN_STUDIO_UNIX_BACKEND=wayland to override)"
-                }
+                "Using X11 backend for lutgen-studio (requested by LUTGEN_STUDIO_UNIX_BACKEND)"
             );
         } else if matches!(backend.as_deref(), Some("wayland")) {
             native_options.event_loop_builder = Some(Box::new(|builder| {

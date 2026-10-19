@@ -43,6 +43,7 @@ pub struct ThemeColors {
     pub panel: String,
     pub surface: String,
     pub surface_alt: String,
+    pub slider_track: Option<String>,
     pub input: String,
     pub text: String,
     pub muted_text: String,
@@ -68,6 +69,7 @@ impl Default for ThemeColors {
             panel: "#1e1c28".into(),
             surface: "#302d3e".into(),
             surface_alt: "#373540".into(),
+            slider_track: None,
             input: "#26233a".into(),
             text: "#e0def4".into(),
             muted_text: "#908caa".into(),
@@ -164,6 +166,7 @@ pub struct Accessibility {
     pub minimum_text_contrast: f32,
     pub minimum_muted_text_contrast: f32,
     pub minimum_control_contrast: f32,
+    pub minimum_track_contrast: f32,
     pub disabled_opacity: f32,
 }
 
@@ -173,6 +176,7 @@ impl Default for Accessibility {
             minimum_text_contrast: 7.0,
             minimum_muted_text_contrast: 4.5,
             minimum_control_contrast: 4.5,
+            minimum_track_contrast: 2.0,
             disabled_opacity: 0.65,
         }
     }
@@ -451,6 +455,7 @@ impl StudioTheme {
                     ThemeValue::new(Chromack, "color-surface-alt"),
                 ],
             ),
+            slider_track: None,
             input: color_hex(
                 snapshot,
                 &defaults.input,
@@ -718,6 +723,19 @@ impl StudioTheme {
         let text_minimum = self.accessibility.minimum_text_contrast.max(4.5);
         let muted_minimum = self.accessibility.minimum_muted_text_contrast.max(4.5);
         let control_minimum = self.accessibility.minimum_control_contrast.max(4.5);
+        let track_minimum = self.accessibility.minimum_track_contrast.max(1.5);
+
+        self.colors.slider_track = Some(
+            ThemeColor::parse(
+                self.colors
+                    .slider_track
+                    .as_deref()
+                    .unwrap_or(&self.colors.surface),
+            )?
+            .with_alpha(255)
+            .ensure_contrast_against(&[background, panel], track_minimum)
+            .to_hex(),
+        );
 
         self.colors.text = ThemeColor::parse(&self.colors.text)?
             .ensure_contrast_against(&[background, panel], text_minimum)
@@ -853,6 +871,83 @@ mod tests {
         assert!(text.contrast_ratio(background) >= 7.0);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generates_visible_slider_tracks_for_dark_and_light_themes() {
+        for background_hex in ["#121520", "#f4f5fa"] {
+            let root = temp_root();
+            let paths = ThemePaths::test(&root);
+            write_sources(&root, "#98adde");
+            fs::write(
+                root.join("chromack/colors.css"),
+                format!(":root {{\n--content-bg: {background_hex};\n}}"),
+            )
+            .unwrap();
+            fs::write(
+                root.join("wardnc/colors.css"),
+                format!(":root {{\n--panel-bg: {background_hex};\n}}"),
+            )
+            .unwrap();
+            fs::write(
+                root.join("dashboard/theme.qml"),
+                format!("property color bg: \"{background_hex}\""),
+            )
+            .unwrap();
+
+            let generated = load_or_generate(&paths).unwrap();
+            let theme = generated.theme;
+            let track = ThemeColor::parse(theme.colors.slider_track.as_deref().unwrap()).unwrap();
+            for background in [&theme.colors.background, &theme.colors.panel] {
+                assert!(
+                    track.contrast_ratio(ThemeColor::parse(background).unwrap())
+                        >= theme.accessibility.minimum_track_contrast
+                );
+            }
+            assert_eq!(super::read_theme(&paths.output).unwrap(), theme);
+
+            let context = egui::Context::default();
+            let (style, _) = theme
+                .styles(
+                    &context.style_of(egui::Theme::Dark),
+                    &context.style_of(egui::Theme::Light),
+                )
+                .unwrap();
+            let rail_height = style.spacing.slider_rail_height;
+            context.set_style(style);
+            let output = context.run(egui::RawInput::default(), |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    ui.add(egui::Slider::new(&mut 0.35, 0.0..=1.0));
+                });
+            });
+            assert!(output.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::epaint::Shape::Rect(rect)
+                    if rect.fill == track.to_egui()
+                        && (rect.rect.height() - rail_height).abs() < 0.01
+            )));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_themes_derive_tracks_from_their_own_surface() {
+        let mut theme: StudioTheme = toml::from_str(
+            "[metadata]\nactive_theme = 'legacy'\nsource_fingerprint = ''\nsources = []\n\
+             [colors]\nbackground = '#121520'\npanel = '#121520'\nsurface = '#526070'\n",
+        )
+        .unwrap();
+
+        theme.correct_contrast().unwrap();
+
+        assert_eq!(theme.colors.slider_track.as_deref(), Some("#526070"));
+        theme.colors.slider_track = Some("#12152000".into());
+        theme.correct_contrast().unwrap();
+        let track = ThemeColor::parse(theme.colors.slider_track.as_deref().unwrap()).unwrap();
+        let background = ThemeColor::parse(&theme.colors.background).unwrap();
+        assert!(track.contrast_ratio(background) >= 2.0);
+        assert_eq!(track.to_egui().a(), 255);
     }
 
     #[test]
